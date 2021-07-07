@@ -50,6 +50,7 @@ test!(runtime_launch, {
 test!(internal_hello_world, {
     let runtime = Northstar::launch().await?;
     runtime.start("hello-world:0.0.1").await?;
+    assume("Process hello-world:0.0.1 exited ", 5).await?;
     runtime.shutdown().await
 });
 
@@ -95,9 +96,9 @@ test!(start_stop_test_container_with_waiting, {
 test!(start_stop_test_container_without_waiting, {
     let mut runtime = Northstar::launch_install_test_container().await?;
 
-    for _ in 0..10u32 {
+    for _ in 0..100u32 {
         runtime.start(TEST_CONTAINER).await?;
-        runtime.stop(TEST_CONTAINER, 1).await?;
+        runtime.stop(TEST_CONTAINER, 5).await?;
 
         assume(
             "Stopped test_container:0.0.1 with status Signaled\\(SIGTERM\\)",
@@ -353,7 +354,7 @@ test!(container_shall_only_have_configured_fds, {
     runtime.start(TEST_CONTAINER).await?;
     assume("/proc/self/fd/0: /dev/null", 5).await?;
     assume("/proc/self/fd/1: pipe:.*", 5).await?;
-    assume("/proc/self/fd/2: /dev/null", 5).await?;
+    assume("/proc/self/fd/2: pipe:.*", 5).await?;
     assume("total: 3", 5).await?;
 
     runtime.shutdown().await

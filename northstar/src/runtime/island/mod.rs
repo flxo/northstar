@@ -16,7 +16,7 @@ use self::fs::Dev;
 use super::{
     config::Config,
     error::Error,
-    pipe::{self, pipe, PipeRead, PipeRecv, PipeSend, PipeWrite, RawFdExt},
+    pipe::{self, pipe, PipeRead, PipeWrite, RawFdExt},
     state::{MountedContainer, Process},
     Event, EventTx, ExitStatus, Pid,
 };
@@ -27,16 +27,19 @@ use nix::{
     errno::Errno,
     libc::c_int,
     sched,
-    sys::{self, signal::Signal},
+    sys::{
+        self,
+        signal::{sigprocmask, SigSet, SigmaskHow, Signal},
+    },
     unistd,
 };
 use npk::manifest::Manifest;
 use sched::CloneFlags;
-use serde::{Deserialize, Serialize};
 use std::{
     convert::TryFrom,
     ffi::{c_void, CString},
     fmt,
+    io::{Read, Write},
     os::unix::io::AsRawFd,
     ptr::null,
     thread,
@@ -133,6 +136,10 @@ impl Island {
         let (mounts, dev) = fs::prepare_mounts(&self.config, &container).await?;
         let groups = groups(manifest);
         let seccomp = seccomp_filter(&container);
+        let root = container
+            .root
+            .canonicalize()
+            .expect("Failed to canonicalize root");
 
         // Do not close child tripwire fd as it will be needed to detect if the runtime process died
         fds.remove(&self.tripwire_read.as_raw_fd());
@@ -145,9 +152,21 @@ impl Island {
         // Clone init
         let flags = CloneFlags::CLONE_NEWPID | CloneFlags::CLONE_NEWNS;
 
+        // Block all signals and unblock after clone.
+        SigSet::all()
+            .thread_block()
+            .expect("Failed to block signals");
+        sigprocmask(SigmaskHow::SIG_BLOCK, Some(&SigSet::all()), None).unwrap();
+
         match clone::clone(flags, Some(SIGCHLD as c_int)) {
             Ok(result) => match result {
                 unistd::ForkResult::Parent { child } => {
+                    // Unblock previously blocked signals
+                    SigSet::all()
+                        .thread_unblock()
+                        .expect("Failed to unblock signals");
+                    sigprocmask(SigmaskHow::SIG_UNBLOCK, Some(&SigSet::all()), None).unwrap();
+
                     block(|| drop(checkpoint_init));
                     debug!("Created {} with pid {}", container.container, child);
 
@@ -176,6 +195,7 @@ impl Island {
 
                     init::init(
                         container,
+                        &root,
                         &init,
                         &argv,
                         &env,
@@ -213,8 +233,8 @@ impl Process for IslandProcess {
                 _dev,
                 mut checkpoint,
             } => {
-                checkpoint.async_send(Start::Start).await;
-                checkpoint.async_wait(Start::Started).await;
+                checkpoint.async_notify().await;
+                checkpoint.async_wait().await;
 
                 Ok(Box::new(IslandProcess::Started {
                     pid,
@@ -472,53 +492,34 @@ fn seccomp_filter(container: &Container) -> Option<seccomp::AllowList> {
         .map(|seccomp| seccomp::seccomp_filter(seccomp.iter()))
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
-enum Start {
-    // Signal the child to go
-    Start,
-    // Signal the parent that go is received
-    Started,
-    // Signal the child that the parent has terminated
-    Died,
-}
-
 pub(super) struct Checkpoint(PipeRead, PipeWrite);
 
 fn checkpoints() -> (Checkpoint, Checkpoint) {
     let a = pipe::pipe().expect("Failed to create pipe");
     let b = pipe::pipe().expect("Failed to create pipe");
 
+    a.0.set_cloexec(true).expect("Failed to set cloexec");
+    a.1.set_cloexec(true).expect("Failed to set cloexec");
+    b.0.set_cloexec(true).expect("Failed to set cloexec");
+    b.1.set_cloexec(true).expect("Failed to set cloexec");
+
     (Checkpoint(a.0, b.1), Checkpoint(b.0, a.1))
 }
 
 impl Checkpoint {
-    fn send(&mut self, c: Start) {
-        self.1.send(c).expect("Pipe error");
+    fn notify(&mut self) {
+        self.1.write_all(b"0").expect("Pipe error");
     }
 
-    fn wait(&mut self, c: Start) {
-        match self.0.recv::<Start>() {
-            Ok(n) if n == c => (),
-            Ok(n) => panic!("Invalid value {:?}. Expected {:?}", n, c),
-            Err(e) => panic!("Pipe error: {}", e),
-        }
+    fn wait(&mut self) {
+        self.0.read_exact(&mut [0u8; 1]).ok();
     }
 
-    async fn async_send(&mut self, c: Start) {
-        task::block_in_place(move || self.send(c));
+    async fn async_notify(&mut self) {
+        task::block_in_place(move || self.notify());
     }
 
-    async fn async_wait(&mut self, c: Start) {
-        task::block_in_place(|| self.wait(c));
+    async fn async_wait(&mut self) {
+        task::block_in_place(|| self.wait());
     }
-}
-
-#[test]
-fn sync() {
-    let (mut child, mut parent) = checkpoints();
-    parent.send(Start::Start);
-    child.wait(Start::Start);
-
-    child.send(Start::Started);
-    parent.wait(Start::Started);
 }

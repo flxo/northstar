@@ -261,6 +261,10 @@ async fn memory_monitor(
             debug!("Stopped oom monitor of {}", container);
         })
     };
+
+    // Yield once to make sure the oom task is started
+    task::yield_now().await;
+
     (stop, task)
 }
 

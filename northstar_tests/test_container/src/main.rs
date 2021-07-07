@@ -48,8 +48,10 @@ enum TestCommands {
         path: PathBuf,
     },
 }
+fn main() {
+}
 
-fn main() -> Result<()> {
+fn _main() -> Result<()> {
     let input = Path::new("/data").join("input.txt");
     if input.exists() {
         println!("Reading {}", input.display());

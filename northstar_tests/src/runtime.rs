@@ -116,16 +116,16 @@ impl Northstar {
                 loop_control: PathBuf::from("/dev/loop-control"),
                 loop_dev: "/dev/loop".into(),
             },
-            debug: None,
-            // debug: Some(config::Debug {
-            //     strace: Some(config::debug::Strace {
-            //         output: config::debug::StraceOutput::File,
-            //         flags: Some("-f -s 512".into()),
-            //         include_runtime: Some(true),
-            //         path: None,
-            //     }),
-            //     perf: None,
-            // }),
+            //debug: None,
+            debug: Some(config::Debug {
+                strace: Some(config::debug::Strace {
+                    output: config::debug::StraceOutput::File,
+                    flags: Some("-f -s 512".into()),
+                    include_runtime: Some(true),
+                    path: None,
+                }),
+                perf: None,
+            }),
         };
 
         // Start the runtime

@@ -20,6 +20,7 @@ const TEST_CONTAINER_MANIFEST: &str = "test_container/manifest.yaml";
 const TEST_RESOURCE_MANIFEST: &str = "test_resource/manifest.yaml";
 const KEY: &str = "../examples/keys/northstar.key";
 
+
 fn main() {
     let tmpdir = tempfile::TempDir::new().expect("Failed to create tmpdir");
     let npk = tmpdir.path().join("npk");
